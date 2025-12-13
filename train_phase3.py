@@ -5,6 +5,10 @@ from torchvision import transforms
 import torch.nn.functional as F
 import os
 import argparse
+import sys
+
+# Ensure we can find the modules
+sys.path.append(os.getcwd())
 
 from dataset_universal import UniversalDepthDataset
 from da3_adapter import DINOv3_DA3_Hybrid
@@ -12,7 +16,7 @@ from da3_adapter import DINOv3_DA3_Hybrid
 # --- Args ---
 parser = argparse.ArgumentParser()
 parser.add_argument('--dataset', type=str, required=True, choices=['nyu', 'eth3d'])
-parser.add_argument('--epochs', type=int, default=10)
+parser.add_argument('--epochs', type=int, default=30) # Default updated to 30
 parser.add_argument('--batch_size', type=int, default=4)
 parser.add_argument('--lr', type=float, default=5e-5)
 args = parser.parse_args()
@@ -22,9 +26,9 @@ SAVE_DIR = f'checkpoints_phase3_{args.dataset}'
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 print(f"--- Starting Phase 3 (Hybrid) on {args.dataset.upper()} ---")
+print(f"--- Saving Mode: Minimal (Latest + Best only) ---")
 
 # --- CORRECT TRANSFORM (512x512) ---
-# 512 is divisible by Patch Size 16. 518 is NOT.
 da3_transform = transforms.Compose([
     transforms.Resize((512, 512)),
     transforms.ToTensor(),
@@ -35,8 +39,11 @@ train_loader = DataLoader(
     UniversalDepthDataset(args.dataset, 'train', transform=da3_transform),
     batch_size=args.batch_size, shuffle=True, num_workers=4
 )
+
+# Use a small subset for validation to save time
+val_dataset = UniversalDepthDataset(args.dataset, 'val', transform=da3_transform)
 val_loader = DataLoader(
-    UniversalDepthDataset(args.dataset, 'val', transform=da3_transform),
+    val_dataset,
     batch_size=args.batch_size, shuffle=False, num_workers=4
 )
 
@@ -53,6 +60,30 @@ def si_loss(pred, target):
     second_term = 0.5 * (torch.pow(torch.sum(di, dim=(1,2,3)), 2) / (n ** 2))
     return (first_term - second_term).mean()
 
+def validate(model, loader):
+    model.eval()
+    total_loss = 0.0
+    with torch.no_grad():
+        for batch in loader:
+            img = batch['image'].to(DEVICE)
+            depth = batch['depth'].to(DEVICE)
+
+            # Resize GT
+            depth = F.interpolate(depth, size=(512, 512), mode='bilinear', align_corners=False)
+            depth = torch.log(depth.clamp(min=1e-3))
+
+            pred = model(img)
+
+            # Align Pred
+            if pred.shape[-1] != 512:
+                pred = F.interpolate(pred, size=(512,512), mode='bilinear', align_corners=False)
+
+            loss = si_loss(pred, depth)
+            total_loss += loss.item()
+    return total_loss / len(loader)
+
+best_val_loss = float('inf')
+
 for epoch in range(args.epochs):
     model.train()
     running_loss = 0.0
@@ -63,6 +94,7 @@ for epoch in range(args.epochs):
 
         # Resize GT to 512
         depth = F.interpolate(depth, size=(512, 512), mode='bilinear', align_corners=False)
+        # Log Depth for SI Loss
         depth = torch.log(depth.clamp(min=1e-3))
 
         optimizer.zero_grad()
@@ -77,10 +109,25 @@ for epoch in range(args.epochs):
         optimizer.step()
         running_loss += loss.item()
 
-        if i % 10 == 0:
-            print(f"Epoch [{epoch+1}/{args.epochs}] Step [{i}/{len(train_loader)}] Loss: {loss.item():.4f}")
+        if i % 50 == 0:
+            print(f"Epoch [{epoch+1}/{args.epochs}] Step [{i}/{len(train_loader)}] Train Loss: {loss.item():.4f}")
 
-    print(f"Epoch {epoch+1} Finished. Avg Loss: {running_loss/len(train_loader):.4f}")
-    torch.save(model.state_dict(), f"{SAVE_DIR}/hybrid_epoch_{epoch+1}.pth")
+    avg_train_loss = running_loss/len(train_loader)
+
+    # Validation step
+    val_loss = validate(model, val_loader)
+    print(f"Epoch {epoch+1} Finished. Train Loss: {avg_train_loss:.4f} | Val Loss: {val_loss:.4f}")
+
+    # SAVE STRATEGY: Minimal Storage
+    # 1. Always save 'latest' (Overwrites previous epoch)
+    latest_path = f"{SAVE_DIR}/hybrid_latest.pth"
+    torch.save(model.state_dict(), latest_path)
+
+    # 2. Save 'best' only if it beats the record
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        best_path = f"{SAVE_DIR}/hybrid_best.pth"
+        torch.save(model.state_dict(), best_path)
+        print(f"  >>> New Best Model Saved! (Val Loss: {best_val_loss:.4f})")
 
 print("Phase 3 Complete.")

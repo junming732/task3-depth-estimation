@@ -14,10 +14,22 @@ class DPTHead(nn.Module):
             for in_channel in in_channels
         ])
 
+        # --- THE CHECKERBOARD FIX ---
+        # Replaced ConvTranspose with Bilinear Upsampling to force smoothness
         self.resize_layers = nn.ModuleList([
-            nn.ConvTranspose2d(features, features, kernel_size=4, stride=4, padding=0),
-            nn.ConvTranspose2d(features, features, kernel_size=2, stride=2, padding=0),
+            # Layer 4 (x4 Upsample)
+            nn.Sequential(
+                nn.Upsample(scale_factor=4, mode='bilinear', align_corners=False),
+                nn.Conv2d(features, features, kernel_size=3, padding=1, bias=False)
+            ),
+            # Layer 11 (x2 Upsample)
+            nn.Sequential(
+                nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+                nn.Conv2d(features, features, kernel_size=3, padding=1, bias=False)
+            ),
+            # Layer 17 (Identity)
             nn.Identity(),
+            # Layer 23 (Downsample)
             nn.MaxPool2d(kernel_size=2, stride=2)
         ])
 
@@ -39,9 +51,9 @@ class DPTHead(nn.Module):
 
     def forward(self, features):
         out = []
-        # --- FIX: USE LARGEST MAP AS TARGET SIZE ---
-        # We calculate the target resolution from the first (highest res) feature map
-        # This prevents crushing everything down to 32x32
+
+        # 1. Get Target Size from the largest map (Layer 4)
+        # This prevents the "Blob" issue by ensuring we target 128x128 resolution, not 32x32
         f0 = features[0]
         x0 = self.projects[0](f0)
         x0 = self.resize_layers[0](x0)
@@ -51,7 +63,7 @@ class DPTHead(nn.Module):
             x = self.projects[i](f)
             x = self.resize_layers[i](x)
 
-            # Interpolate everything to the largest size
+            # Force all maps to align to the largest size
             if x.shape[-2:] != (target_H, target_W):
                 x = F.interpolate(x, size=(target_H, target_W), mode='bilinear', align_corners=False)
             out.append(x)
@@ -77,7 +89,6 @@ class DINOv3_DA3_Hybrid(nn.Module):
 
         new_state_dict = {}
         for k, v in state_dict.items():
-            # Standard Shim Translations
             new_k = k.replace("module.", "").replace("backbone.", "")
             new_k = new_k.replace("embeddings.patch_embeddings", "patch_embed.proj")
             new_k = new_k.replace("embeddings.cls_token", "cls_token")
@@ -95,7 +106,7 @@ class DINOv3_DA3_Hybrid(nn.Module):
             if "mask_token" in new_k and v.ndim == 3: v = v.squeeze(1)
             new_state_dict[new_k] = v
 
-        # QKV FUSION (Defensive)
+        # FUSE QKV
         final_state_dict = {}
         fused_keys = set()
         for i in range(24):
@@ -118,22 +129,24 @@ class DINOv3_DA3_Hybrid(nn.Module):
         msg = self.backbone.load_state_dict(final_state_dict, strict=False)
         print(f"Backbone Loaded. Missing keys: {len(msg.missing_keys)}")
 
-        # Unfreeze Last Block
+        # --- UNFREEZE STRATEGY FOR 30 EPOCHS ---
+        # We unfreeze the last 3 blocks (21, 22, 23) to allow better adaptation
         for param in self.backbone.parameters():
             param.requires_grad = False
+
         for name, param in self.backbone.named_parameters():
-            if "blocks.23" in name or "norm" in name:
+            if any(x in name for x in ["blocks.21", "blocks.22", "blocks.23", "norm"]):
                 param.requires_grad = True
 
+        print("Model Configuration: Unfrozen Blocks 21, 22, 23 + Norms.")
         self.head = DPTHead(in_channels=[1024, 1024, 1024, 1024])
 
     def forward(self, x):
-        # --- THE GOLDEN FIX ---
-        # 1. Get ALL 24 layers
+        # 1. Get ALL layers
         all_feat = self.backbone.get_intermediate_layers(x, n=24, reshape=True)
 
-        # 2. Pick the "Golden Quartet" (Early, Mid, Mid, Late)
-        # Layer 4  = Edges (High Res info in the embedding)
+        # 2. Pick the "Golden Quartet"
+        # Layer 4  = Edges (High Res)
         # Layer 11 = Shapes
         # Layer 17 = Objects
         # Layer 23 = Context
