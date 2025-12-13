@@ -31,12 +31,13 @@ if args.model_type == 'probe':
     input_size = (224, 224)
     model = DINOv3LinearProbe(output_size=input_size).to(DEVICE)
 elif args.model_type == 'da3':
-    input_size = (518, 518)
+    # CRITICAL FIX: Must match training resolution (512x512)
+    input_size = (512, 512)
     model = DINOv3_DA3_Hybrid().to(DEVICE)
 
 state_dict = torch.load(args.checkpoint, map_location=DEVICE)
 clean_state_dict = {k.replace("module.", ""): v for k, v in state_dict.items()}
-model.load_state_dict(clean_state_dict, strict=False) # strict=False is safer for viz
+model.load_state_dict(clean_state_dict, strict=False)
 model.eval()
 
 viz_transform = transforms.Compose([
@@ -61,7 +62,7 @@ if args.mode == 'test_set':
 
     with torch.no_grad():
         pred = model(images)
-        pred = torch.exp(pred) # <--- CRITICAL FIX: UN-LOG
+        pred = torch.exp(pred) # Un-Log logic
 
         gt_resized = F.interpolate(gt_depth, size=(224, 224), mode='bilinear')
         pred_resized = F.interpolate(pred, size=(224, 224), mode='bilinear')
@@ -96,7 +97,7 @@ elif args.mode == 'custom':
 
     if not image_paths:
         print(f"ERROR: No images found in {args.input_folder}.")
-        print("Please upload .jpg files (e.g., photo of your room) to this folder!")
+        print("Please upload .jpg files to this folder!")
         exit()
 
     for img_path in image_paths:
@@ -106,7 +107,7 @@ elif args.mode == 'custom':
 
         with torch.no_grad():
             pred = model(input_tensor)
-            pred = torch.exp(pred) # <--- CRITICAL FIX: UN-LOG
+            pred = torch.exp(pred)
 
         fig, axes = plt.subplots(1, 2, figsize=(10, 5))
         axes[0].imshow(pil_img.resize((224, 224)))

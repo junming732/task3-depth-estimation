@@ -28,7 +28,9 @@ if args.model_type == 'probe':
     input_size = (224, 224)
     model = DINOv3LinearProbe(output_size=input_size).to(device)
 elif args.model_type == 'da3':
-    input_size = (518, 518)
+    # CRITICAL FIX: Must match training resolution (512x512)
+    # 512 is divisible by patch size 16. 518 is not.
+    input_size = (512, 512)
     model = DINOv3_DA3_Hybrid().to(device)
 
 print(f"Loading {args.dataset.upper()} Test Set...")
@@ -52,7 +54,7 @@ def compute_metrics(pred, target):
     # 1. Un-Log (Both Phase 1 and Phase 3 were trained on Log Depth)
     pred = torch.exp(pred)
 
-    # 2. Resize to GT
+    # 2. Resize to GT dimensions
     if pred.shape[-2:] != target.shape[-2:]:
         pred = F.interpolate(pred, size=target.shape[-2:], mode='bilinear', align_corners=False)
 
@@ -63,8 +65,7 @@ def compute_metrics(pred, target):
 
     if len(target) == 0: return 0.0, 0.0, 0.0
 
-    # 4. MEDIAN SCALING (Crucial for SI Loss models)
-    # We align the median of the prediction to the median of the target
+    # 4. MEDIAN SCALING
     scale = torch.median(target) / torch.median(pred)
     pred = pred * scale
 
