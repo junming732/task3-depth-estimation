@@ -1,0 +1,10 @@
+torch>=2.0.0
+torchvision>=0.15.0
+numpy
+matplotlib
+Pillow
+huggingface_hub[cli]
+transformers
+scikit-image
+opencv-python
+timm
