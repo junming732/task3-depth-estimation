@@ -12,3 +12,5 @@ nyu_depth_v2_labeled.mat
 
 venv
 checkpoints*/
+
+__pycache__
