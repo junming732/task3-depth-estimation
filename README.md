@@ -2,7 +2,7 @@
 
 ## Quick Start (Easiest Way)
 Use the Google Colab notebook to run the analysis immediately without local setup.
-* **[Click Here to Run in Colab](https://colab.research.google.com/drive/1ofS54sy6byKLzyMebWKhkJZSdZEIbDef?usp=sharing)**
+* **[Click Here to Run in Colab](https://colab.research.google.com/drive/1unA38uUx5iOvrY4kY3hkRqjaeMzH3kb-?usp=sharing)**
 * *Note: This notebook automatically clones the code, downloads the DINOv3 backbone, and pulls the custom trained weights from Hugging Face. No manual file uploads are required.*
 
 ## 1. Overview
