@@ -50,8 +50,47 @@ The `inference.py` script runs a comparative study on a provided image:
 ```bash
 python inference.py --image_path ./sample_image.jpg
 ```
+## 4. Training Instructions
 
-## 4. Expected Results & Interpretation
+We use a two-stage training strategy to ensure stability.
+### Step 1: Phase 1 (Linear Probe)
+* **Goal**: Verify that the DINOv3 features are rich enough to predict depth using a simple linear layer.
+* **Mechanism**: The backbone is Frozen. Only the final $1\times1$ convolution is trained.
+* **Command**:
+```bash
+python train_phase1.py --epochs 5 --batch_size 16
+```
+* **Output**: Saves checkpoints to checkpoints_phase1_nyu/.
+
+Step 2: Phase 3 (Hybrid Adapter)
+* **`Goal**: Train the high-performance DPT head to recover fine details.
+* **Mechanism**: We attach a Dense Prediction Transformer (DPT) head. The backbone remains frozen (or can be partially unfrozen) while the adapter layers learn to fuse multi-scale features (Layer 4, 11, 17, 23).
+* **Loss Function**: Scale-Invariant Log Loss (matches the geometry of the scene rather than absolute metric depth).
+* **Command**:
+```bash
+python train_phase3.py --epochs 20 --batch_size 4 --lr 1e-4
+```
+* **Output**: Saves the best model to hybrid_best.pth.
+
+## 5. How to Run Inference
+### Option A: Use Pre-trained Weights (Recommended)
+You can download our trained weights from Hugging Face instead of training from scratch:
+```bash
+huggingface-cli download Junming111/task3 dinov3_vitl16.pth --local-dir .
+huggingface-cli download Junming111/task3 hybrid_best.pth --local-dir .
+```
+### Option B: Run on Your Image
+```bash
+python inference.py --image_path ./sample_image.jpg
+```
+### Option C: Full Evaluation
+To generate metrics and visual comparisons across all
+models:
+```bash
+python evaluate_comprehensive.py
+```
+
+## 6. Expected Results & Interpretation
 
 The results demonstrate the "Foundation Model Advantage," particularly in generalizing to complex scenes.
 
